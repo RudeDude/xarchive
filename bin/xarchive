@@ -1,0 +1,10 @@
+#!/bin/sh
+# Run the checkout's virtualenv, not a copy under ~/.local.
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+PY="$ROOT/.venv/bin/python"
+if [ ! -x "$PY" ]; then
+  echo "missing $PY" >&2
+  echo "from $ROOT: python3 -m venv .venv && .venv/bin/pip install -e ." >&2
+  exit 1
+fi
+exec "$PY" -m xarchive "$@"
