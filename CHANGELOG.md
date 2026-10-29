@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Review keeps, Show deleted, and Review deletes keep the year/month tree. A year or month link stays on that view and lists only its posts.
+- The main list hides posts already deleted. **Show deleted** in the header includes them again. Posts marked for deletion stay in the main list. The default status choice is "except keeps and deleted".
+- The main list hides posts marked keep. **Review keeps** (`/keeps`) lists them, and marking keep removes the card from the main list. The status menu's default is "except keeps"; choosing `keep` shows only those posts. Month counts follow the same filter.
 - The local UI sort menu adds the reverse of each order: oldest, least likes, least RTs, and least views. A left-hand year/month tree jumps to that year or month; the year that contains the current range (or the newest year) starts expanded.
 - SQLite, media, credentials, and `serve.log` default to `<checkout>/data` instead of `~/.local/share/xarchive`. The virtualenv stays in `<checkout>/.venv`. `./bin/xarchive` runs that interpreter so the checkout moves as one directory. `data/` is gitignored.
 - Local UI pager includes First/Last plus numbered jumps (first pages, around the current page, and the last five) so you can start at the oldest posts and walk backward.

@@ -132,6 +132,136 @@ def test_index_renders_and_mark_flips_status(cfg, db, archive_zip):
         httpd.server_close()
 
 
+def test_keeps_are_hidden_on_the_main_list_and_listed_under_review_keeps(cfg, db, archive_zip):
+    import_archive(archive_zip, db, cfg.media_dir)
+    mark_tweets(db, "keep", [T2018, T2019_XYLO])
+    httpd, base = _serve(cfg)
+    try:
+        home = httpx.get(base + "/", timeout=5.0)
+        assert home.status_code == 200
+        assert f'id="t{T2018}"' not in home.text
+        assert f'id="t{T2019_XYLO}"' not in home.text
+        assert XYLOPHONE not in home.text
+        assert T2022_MEDIA in home.text
+        assert "Review keeps" in home.text
+        assert 'href="/keeps"' in home.text
+        assert "except keeps" in home.text
+        assert "from=2018-03-01" not in home.text
+        assert "from=2019-06-01" not in home.text
+        assert 'pagePath === "/keeps"' in home.text
+        keeps = httpx.get(base + "/keeps", timeout=5.0)
+        assert keeps.status_code == 200
+        assert "<h1>Review keeps</h1>" in keeps.text
+        assert T2018 in keeps.text
+        assert T2019_XYLO in keeps.text
+        assert XYLOPHONE in keeps.text
+        assert T2022_MEDIA not in keeps.text
+        assert 'aria-current="page"' in keeps.text
+        explicit = httpx.get(base + "/?status=keep", timeout=5.0)
+        assert T2018 in explicit.text
+        assert T2019_XYLO in explicit.text
+        assert T2022_MEDIA not in explicit.text
+        assert "from=2018-03-01" in explicit.text
+        assert "from=2022-08-01" not in explicit.text
+        review = httpx.get(base + "/review", timeout=5.0)
+        assert T2018 not in review.text
+        assert "Nothing marked for delete." in review.text
+        cleared = httpx.post(
+            base + "/mark",
+            data={"id": T2018, "status": "cached", "next": "/keeps"},
+            timeout=5.0,
+            follow_redirects=False,
+        )
+        assert cleared.status_code in (303, 302)
+        assert cleared.headers["Location"].startswith("/keeps")
+        again = httpx.get(base + "/", timeout=5.0)
+        assert T2018 in again.text
+        assert "from=2018-03-01" in again.text
+        still = httpx.get(base + "/keeps", timeout=5.0)
+        assert f'id="t{T2018}"' not in still.text
+        assert T2019_XYLO in still.text
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_deleted_hidden_by_default_and_delete_marked_stays_in_the_list(cfg, db, archive_zip):
+    import_archive(archive_zip, db, cfg.media_dir)
+    db.set_status(T2018, "deleted")
+    db.set_status(T2019_XYLO, "delete_marked")
+    mark_tweets(db, "keep", [T2022_MEDIA])
+    httpd, base = _serve(cfg)
+    try:
+        home = httpx.get(base + "/", timeout=5.0)
+        assert home.status_code == 200
+        assert f'id="t{T2018}"' not in home.text
+        assert f'id="t{T2019_XYLO}"' in home.text
+        assert f'id="t{T2022_MEDIA}"' not in home.text
+        assert "from=2018-03-01" not in home.text
+        assert "from=2019-06-01" in home.text
+        assert '<a href="/" aria-current="page">All</a>' in home.text
+        assert '<a href="/?show_deleted=1">Show deleted</a>' in home.text
+        assert "except keeps and deleted" in home.text
+        shown = httpx.get(base + "/?show_deleted=1", timeout=5.0)
+        assert shown.status_code == 200
+        assert f'id="t{T2018}"' in shown.text
+        assert f'id="t{T2019_XYLO}"' in shown.text
+        assert f'id="t{T2022_MEDIA}"' not in shown.text
+        assert "from=2018-03-01" in shown.text
+        assert "show_deleted=1" in shown.text
+        assert '<a href="/?show_deleted=1" aria-current="page">Show deleted</a>' in shown.text
+        assert 'name="show_deleted" value="1"' in shown.text
+        assert "except keeps</option>" in shown.text
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_month_tree_stays_on_keeps_deleted_and_review(cfg, db, archive_zip):
+    import_archive(archive_zip, db, cfg.media_dir)
+    db.set_status(T2018, "deleted")
+    mark_tweets(db, "keep", [T2019_XYLO])
+    db.set_status(T2022_MEDIA, "delete_marked")
+    httpd, base = _serve(cfg)
+    try:
+        keeps = httpx.get(base + "/keeps", timeout=5.0)
+        assert 'aria-label="Browse by month"' in keeps.text
+        assert 'href="/keeps?from=2019-06-01&amp;to=2019-06-30"' in keeps.text
+        assert "from=2018-03-01" not in keeps.text
+        assert "from=2022-08-01" not in keeps.text
+        june = httpx.get(base + "/keeps?from=2019-06-01&to=2019-06-30", timeout=5.0)
+        assert f'id="t{T2019_XYLO}"' in june.text
+        assert f'id="t{T2018}"' not in june.text
+        assert 'class="month here"' in june.text
+        assert 'name="from" value="2019-06-01"' in june.text
+        opened = june.text.find("<details open>")
+        assert ">2019</a>" in june.text[opened : opened + 500]
+
+        review = httpx.get(base + "/review", timeout=5.0)
+        assert 'aria-label="Browse by month"' in review.text
+        assert 'href="/review?from=2022-08-01&amp;to=2022-08-31"' in review.text
+        assert "from=2019-06-01" not in review.text
+        august = httpx.get(base + "/review?from=2022-08-01&to=2022-08-31", timeout=5.0)
+        assert f'id="t{T2022_MEDIA}"' in august.text
+        assert f'id="t{T2019_XYLO}"' not in august.text
+        assert 'class="month here"' in august.text
+
+        shown = httpx.get(base + "/?show_deleted=1", timeout=5.0)
+        assert 'aria-label="Browse by month"' in shown.text
+        assert 'href="/?show_deleted=1&amp;from=2018-03-01&amp;to=2018-03-31"' in shown.text
+        march = httpx.get(
+            base + "/?show_deleted=1&from=2018-03-01&to=2018-03-31",
+            timeout=5.0,
+        )
+        assert f'id="t{T2018}"' in march.text
+        assert f'id="t{T2019_XYLO}"' not in march.text
+        assert f'id="t{T2022_MEDIA}"' not in march.text
+        assert 'class="month here"' in march.text
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_page_numbers_includes_high_pages_and_gaps():
     nums = page_numbers(1, 39)
     assert nums[0] == 1

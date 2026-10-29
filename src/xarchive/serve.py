@@ -89,6 +89,7 @@ body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 1080px;
 header { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; align-items: baseline; }
 h1 { font-size: 1.1rem; margin: 0; }
 nav a { margin-right: .85rem; }
+nav a[aria-current="page"] { font-weight: 650; }
 .counts { color: #444; font-size: .8rem; margin: .4rem 0; }
 form.search { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: .6rem 0; }
 input, select, button { font: inherit; font-size: .8rem; padding: .12rem .4rem; }
@@ -212,11 +213,18 @@ JS = r"""
       const data = await res.json();
       const status = data.status;
       const ids = data.ids || [];
-      const onReview = location.pathname === "/review";
+      const pagePath = location.pathname;
+      const statusFilter = new URLSearchParams(location.search).get("status") || "";
+      const onIndex = pagePath === "/" || pagePath === "/index";
+      const leaveList =
+        (pagePath === "/review" && status !== "delete_marked") ||
+        (pagePath === "/keeps" && status !== "keep") ||
+        (onIndex && statusFilter === "" && status === "keep") ||
+        (onIndex && statusFilter !== "" && status !== statusFilter);
       for (const id of ids) {
         const card = document.getElementById("t" + id);
         if (!card) continue;
-        if (onReview && status !== "delete_marked") {
+        if (leaveList) {
           card.remove();
           continue;
         }
@@ -583,10 +591,47 @@ def _year_bounds(year: int) -> tuple[str, str]:
     return f"{year:04d}-01-01", f"{year:04d}-12-31"
 
 
-def _browse_tree(db: Database, qs: dict[str, list[str]]) -> str:
-    rows = db.month_counts()
+def _show_deleted(qs: dict[str, list[str]]) -> bool:
+    return (qs.get("show_deleted") or [""])[0] in {"1", "on", "true"}
+
+
+def _index_exclusions(qs: dict[str, list[str]]) -> tuple[str, ...]:
+    """Statuses left off the main list. An explicit status filter replaces this."""
+    if (qs.get("status") or [""])[0]:
+        return ()
+    if _show_deleted(qs):
+        return ("keep",)
+    return ("keep", "deleted")
+
+
+def _show_deleted_href(qs: dict[str, list[str]]) -> str:
+    kept: dict[str, str] = {}
+    for key, values in qs.items():
+        if key in {"page", "status", "show_deleted"} or not values or values[0] == "":
+            continue
+        kept[key] = values[0]
+    kept["show_deleted"] = "1"
+    return "/?" + urllib.parse.urlencode(kept)
+
+
+def _browse_tree(
+    db: Database,
+    qs: dict[str, list[str]],
+    *,
+    path: str,
+    status: str | None,
+    exclude_statuses: tuple[str, ...] = (),
+) -> str:
+    rows = db.month_counts(
+        status=status,
+        exclude_statuses=() if status else exclude_statuses,
+    )
     if not rows:
-        return '<nav class="browse" aria-label="Browse by month"><p class="browse-title">Months</p><p>No posts yet.</p></nav>'
+        empty = "No posts yet." if path == "/" and status is None else "No posts in this view."
+        return (
+            '<nav class="browse" aria-label="Browse by month">'
+            f'<p class="browse-title">Months</p><p>{empty}</p></nav>'
+        )
     from_date = (qs.get("from") or [""])[0]
     to_date = (qs.get("to") or [""])[0]
     years: dict[int, list[tuple[int, int]]] = {}
@@ -618,7 +663,7 @@ def _browse_tree(db: Database, qs: dict[str, list[str]]) -> str:
         year_start, year_end = _year_bounds(year)
         year_here = " here" if from_date == year_start and to_date == year_end else ""
         open_attr = " open" if year == active_year else ""
-        year_href = html.escape(_range_url("/", qs, year_start, year_end))
+        year_href = html.escape(_range_url(path, qs, year_start, year_end))
         parts.append(f"<details{open_attr}>")
         parts.append(
             f'<summary><a class="year{year_here}" href="{year_href}">{year}</a> '
@@ -627,7 +672,7 @@ def _browse_tree(db: Database, qs: dict[str, list[str]]) -> str:
         for month, count in months:
             start, end = _month_bounds(year, month)
             here = " here" if from_date == start and to_date == end else ""
-            href = html.escape(_range_url("/", qs, start, end))
+            href = html.escape(_range_url(path, qs, start, end))
             parts.append(
                 f'<li><a class="month{here}" href="{href}">{_MONTHS[month]}</a> '
                 f'<span class="n">{count}</span></li>'
@@ -648,6 +693,47 @@ def _cards_for(db: Database, rows: list[Tweet], *, next_path: str) -> str:
     return cards or "<p>No tweets. Run <code>xarchive import</code>.</p>"
 
 
+def _nav(current: str, *, show_deleted_href: str = "/?show_deleted=1") -> str:
+    links = (
+        ("all", "/", "All"),
+        ("keeps", "/keeps", "Review keeps"),
+        ("review", "/review", "Review deletes"),
+        ("deleted", show_deleted_href, "Show deleted"),
+    )
+    bits = []
+    for key, href, label in links:
+        current_attr = ' aria-current="page"' if key == current else ""
+        bits.append(f'<a href="{html.escape(href)}"{current_attr}>{label}</a>')
+    return "<nav>" + "".join(bits) + "</nav>"
+
+
+def _top(title: str, current: str, *, show_deleted_href: str = "/?show_deleted=1") -> str:
+    return f"""
+<header>
+  <h1>{html.escape(title)}</h1>
+  {_nav(current, show_deleted_href=show_deleted_href)}
+  <label class="toggle"><input type="checkbox" id="previews-toggle"> Auto X previews</label>
+</header>
+"""
+
+
+def _status_options(current: str | None, *, show_deleted: bool) -> str:
+    options = (
+        ("", "except keeps" if show_deleted else "except keeps and deleted"),
+        ("cached", "cached"),
+        ("keep", "keep"),
+        ("delete_marked", "delete_marked"),
+        ("deleted", "deleted"),
+        ("delete_failed", "delete_failed"),
+    )
+    selected = current or ""
+    return "".join(
+        f'<option value="{html.escape(value)}"{" selected" if selected == value else ""}>'
+        f"{html.escape(label)}</option>"
+        for value, label in options
+    )
+
+
 def render_index(db: Database, qs: dict[str, list[str]]) -> bytes:
     text = (qs.get("text") or [""])[0]
     status = (qs.get("status") or [""])[0] or None
@@ -658,14 +744,22 @@ def render_index(db: Database, qs: dict[str, list[str]]) -> bytes:
     sort = _sort_key(qs)
     from_ts = parse_date_bound(from_date or None, end=False)
     to_ts = parse_date_bound(to_date or None, end=True)
+    show_deleted = _show_deleted(qs)
+    exclusions = _index_exclusions(qs)
     total = db.count_matching(
-        text=text or None, status=status, media=media, from_ts=from_ts, to_ts=to_ts
+        text=text or None,
+        status=status,
+        exclude_statuses=exclusions,
+        media=media,
+        from_ts=from_ts,
+        to_ts=to_ts,
     )
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE) if total else 1
     page = min(page, pages)
     rows = db.query(
         text=text or None,
         status=status,
+        exclude_statuses=exclusions,
         media=media,
         from_ts=from_ts,
         to_ts=to_ts,
@@ -674,38 +768,44 @@ def render_index(db: Database, qs: dict[str, list[str]]) -> bytes:
         sort=sort,
     )
     counts = db.status_counts()
-    options = "".join(
-        f'<option value="{html.escape(s)}"{" selected" if status == s else ""}>{html.escape(s)}</option>'
-        for s in ("", "cached", "keep", "delete_marked", "deleted", "delete_failed")
-    )
     next_path = _query_url("/", qs, page=page)
     page_ids = [t.id for t in rows if t.status != "deleted"]
     cards = _cards_for(db, rows, next_path=next_path)
     if not rows:
-        cards = "<p>No tweets. Run <code>xarchive import</code>.</p>"
+        unfiltered = not text and not media and not from_date and not to_date and status is None
+        notes: list[str] = []
+        if unfiltered and counts.get("keep"):
+            notes.append('Marked keeps are under <a href="/keeps">Review keeps</a>.')
+        if unfiltered and not show_deleted and counts.get("deleted"):
+            notes.append(f'<a href="{html.escape(_show_deleted_href(qs))}">Show deleted</a> lists posts already removed.')
+        if notes:
+            cards = "<p>Nothing left in this view. " + " ".join(notes) + "</p>"
+        else:
+            cards = "<p>No tweets. Run <code>xarchive import</code>.</p>"
+    nav_current = "deleted" if show_deleted and status is None else "all"
+    hidden_deleted = (
+        '<input type="hidden" name="show_deleted" value="1">' if show_deleted else ""
+    )
     body = f"""
 <div class="layout">
-{_browse_tree(db, qs)}
+{_browse_tree(db, qs, path="/", status=status, exclude_statuses=exclusions)}
 <div class="main">
-<header>
-  <h1>xarchive</h1>
-  <nav>
-    <a href="/">All</a>
-    <a href="/review">Review deletes</a>
-  </nav>
-  <label class="toggle"><input type="checkbox" id="previews-toggle"> Auto X previews</label>
-</header>
+{_top("xarchive", nav_current, show_deleted_href=_show_deleted_href(qs))}
 {_counts_html(counts)}
 <form class="search" method="get" action="/">
+  {hidden_deleted}
   <input name="text" value="{html.escape(text)}" placeholder="search">
-  <select name="status">{options}</select>
+  <select name="status">{_status_options(status, show_deleted=show_deleted)}</select>
   <label><input type="checkbox" name="media" value="1" {"checked" if media else ""}> media</label>
   <input type="date" name="from" value="{html.escape(from_date)}" title="from">
   <input type="date" name="to" value="{html.escape(to_date)}" title="to">
   <select name="sort" title="sort">{_sort_options(sort)}</select>
   <button type="submit">Search</button>
 </form>
-<p class="notice">Local only (127.0.0.1). Apply deletes from the CLI:
+<p class="notice">Posts marked keep are hidden here and listed under Review keeps.
+Choose <strong>keep</strong> in the status menu to show only those on this page.
+Deleted posts are hidden until <strong>Show deleted</strong>. Posts marked for deletion stay in this list.
+Local only (127.0.0.1). Apply deletes from the CLI:
 <code>xarchive delete</code> then <code>xarchive delete --apply --confirm PERMANENTLY-DELETE</code>.
 The server does not call X; <strong>Preview on X</strong> loads an embed in your browser.</p>
 {_bulk_bar(next_path, page_ids)}
@@ -718,45 +818,101 @@ The server does not call X; <strong>Preview on X</strong> loads an embed in your
     return _page("xarchive", body)
 
 
-def render_review(db: Database, qs: dict[str, list[str]] | None = None) -> bytes:
+def _render_status_queue(
+    db: Database,
+    qs: dict[str, list[str]] | None,
+    *,
+    path: str,
+    status: str,
+    title: str,
+    doc_title: str,
+    empty: str,
+    notice: str,
+) -> bytes:
     qs = qs or {}
     page = _page_num(qs)
     sort = _sort_key(qs)
-    total = db.count_matching(status="delete_marked")
+    from_date = (qs.get("from") or [""])[0]
+    to_date = (qs.get("to") or [""])[0]
+    from_ts = parse_date_bound(from_date or None, end=False)
+    to_ts = parse_date_bound(to_date or None, end=True)
+    total = db.count_matching(status=status, from_ts=from_ts, to_ts=to_ts)
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE) if total else 1
     page = min(page, pages)
     rows = db.query(
-        status="delete_marked",
+        status=status,
+        from_ts=from_ts,
+        to_ts=to_ts,
         limit=PAGE_SIZE,
         offset=(page - 1) * PAGE_SIZE,
         sort=sort,
     )
     counts = db.status_counts()
-    next_path = _query_url("/review", qs, page=page)
+    next_path = _query_url(path, qs, page=page)
     page_ids = [t.id for t in rows]
     cards = _cards_for(db, rows, next_path=next_path)
     if not rows:
-        cards = "<p>Nothing marked for delete.</p>"
+        cards = f"<p>{html.escape(empty)}</p>"
+    hidden_range = ""
+    if from_date:
+        hidden_range += f'<input type="hidden" name="from" value="{html.escape(from_date)}">'
+    if to_date:
+        hidden_range += f'<input type="hidden" name="to" value="{html.escape(to_date)}">'
     body = f"""
-<header>
-  <h1>Review before apply</h1>
-  <nav><a href="/">Back</a></nav>
-  <label class="toggle"><input type="checkbox" id="previews-toggle"> Auto X previews</label>
-</header>
+<div class="layout">
+{_browse_tree(db, qs, path=path, status=status)}
+<div class="main">
+{_top(title, path.strip("/") or "all")}
 {_counts_html(counts)}
-<p class="notice">{total} tweet(s) marked delete_marked will be sent to the official X API on
-<code>xarchive delete --apply --confirm PERMANENTLY-DELETE</code>.
-Retweets unretweet the source id; originals DELETE /2/tweets/:id.
-This UI does not call X. <strong>Preview on X</strong> loads an embed in your browser.</p>
-<form class="search" method="get" action="/review">
+<p class="notice">{notice.format(total=total)}</p>
+<form class="search" method="get" action="{path}">
+  {hidden_range}
   <select name="sort" title="sort">{_sort_options(sort)}</select>
   <button type="submit">Sort</button>
 </form>
 {_bulk_bar(next_path, page_ids)}
-{_pager("/review", qs, page, total, PAGE_SIZE)}
+{_pager(path, qs, page, total, PAGE_SIZE)}
 {cards}
+{_pager(path, qs, page, total, PAGE_SIZE)}
+</div>
+</div>
 """
-    return _page("xarchive review", body)
+    return _page(doc_title, body)
+
+
+def render_review(db: Database, qs: dict[str, list[str]] | None = None) -> bytes:
+    return _render_status_queue(
+        db,
+        qs,
+        path="/review",
+        status="delete_marked",
+        title="Review before apply",
+        doc_title="xarchive review",
+        empty="Nothing marked for delete.",
+        notice=(
+            "{total} tweet(s) marked delete_marked will be sent to the official X API on "
+            "<code>xarchive delete --apply --confirm PERMANENTLY-DELETE</code>. "
+            "Retweets unretweet the source id; originals DELETE /2/tweets/:id. "
+            "This UI does not call X. <strong>Preview on X</strong> loads an embed in your browser."
+        ),
+    )
+
+
+def render_keeps(db: Database, qs: dict[str, list[str]] | None = None) -> bytes:
+    return _render_status_queue(
+        db,
+        qs,
+        path="/keeps",
+        status="keep",
+        title="Review keeps",
+        doc_title="xarchive keeps",
+        empty="Nothing marked keep.",
+        notice=(
+            "Posts marked keep are hidden on the main list. "
+            "Clear a mark to put a post back. "
+            "This UI does not call X. <strong>Preview on X</strong> loads an embed in your browser."
+        ),
+    )
 
 
 def configure_serve_logging(log_path: Path) -> logging.Logger:
@@ -823,6 +979,13 @@ def make_handler(cfg: Config, log: logging.Logger | None = None) -> type[BaseHTT
                     db = self._db()
                     try:
                         self._send(200, render_review(db, qs), "text/html; charset=utf-8")
+                    finally:
+                        db.close()
+                    return
+                if parsed.path == "/keeps":
+                    db = self._db()
+                    try:
+                        self._send(200, render_keeps(db, qs), "text/html; charset=utf-8")
                     finally:
                         db.close()
                     return

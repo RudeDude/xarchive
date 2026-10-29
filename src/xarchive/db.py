@@ -506,12 +506,18 @@ class Database:
         to_ts: int | None = None,
         media: bool = False,
         status: str | None = None,
+        exclude_statuses: tuple[str, ...] = (),
         limit: int | None = None,
         offset: int = 0,
         sort: str = "date",
     ) -> list[Tweet]:
         joins, where, params = self._filter_parts(
-            text=text, from_ts=from_ts, to_ts=to_ts, media=media, status=status
+            text=text,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            media=media,
+            status=status,
+            exclude_statuses=exclude_statuses,
         )
         order = SORTS.get(sort, SORTS["date"])
         sql = "SELECT tweets.* FROM tweets " + " ".join(joins)
@@ -546,6 +552,10 @@ class Database:
             if status:
                 where2.append("tweets.status = ?")
                 params2.append(status)
+            elif exclude_statuses:
+                marks = ",".join("?" * len(exclude_statuses))
+                where2.append(f"tweets.status NOT IN ({marks})")
+                params2.extend(exclude_statuses)
             sql = "SELECT * FROM tweets WHERE " + " AND ".join(where2)
             sql += " ORDER BY " + order.replace("tweets.", "")
             if limit is not None:
@@ -557,19 +567,34 @@ class Database:
             rows = self._conn.execute(sql, params2).fetchall()
         return [_row_to_tweet(r) for r in rows]
 
-    def month_counts(self) -> list[tuple[int, int, int]]:
+    def month_counts(
+        self,
+        *,
+        status: str | None = None,
+        exclude_statuses: tuple[str, ...] = (),
+    ) -> list[tuple[int, int, int]]:
         """(year, month, count) for posts with a real timestamp, newest month first."""
+        where = ["created_at_ts > 0"]
+        params: list[Any] = []
+        if status:
+            where.append("status = ?")
+            params.append(status)
+        elif exclude_statuses:
+            marks = ",".join("?" * len(exclude_statuses))
+            where.append(f"status NOT IN ({marks})")
+            params.extend(exclude_statuses)
         rows = self._conn.execute(
-            """
+            f"""
             SELECT
               CAST(strftime('%Y', created_at_ts, 'unixepoch') AS INTEGER) AS y,
               CAST(strftime('%m', created_at_ts, 'unixepoch') AS INTEGER) AS m,
               COUNT(*) AS n
             FROM tweets
-            WHERE created_at_ts > 0
+            WHERE {" AND ".join(where)}
             GROUP BY y, m
             ORDER BY y DESC, m DESC
-            """
+            """,
+            params,
         ).fetchall()
         return [(int(r["y"]), int(r["m"]), int(r["n"])) for r in rows]
 
@@ -581,9 +606,15 @@ class Database:
         to_ts: int | None = None,
         media: bool = False,
         status: str | None = None,
+        exclude_statuses: tuple[str, ...] = (),
     ) -> int:
         joins, where, params = self._filter_parts(
-            text=text, from_ts=from_ts, to_ts=to_ts, media=media, status=status
+            text=text,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            media=media,
+            status=status,
+            exclude_statuses=exclude_statuses,
         )
         sql = "SELECT COUNT(*) AS n FROM tweets " + " ".join(joins)
         if where:
@@ -593,7 +624,16 @@ class Database:
         except sqlite3.OperationalError:
             if not text:
                 raise
-            return len(self.query(text=text, from_ts=from_ts, to_ts=to_ts, media=media, status=status))
+            return len(
+                self.query(
+                    text=text,
+                    from_ts=from_ts,
+                    to_ts=to_ts,
+                    media=media,
+                    status=status,
+                    exclude_statuses=exclude_statuses,
+                )
+            )
         return int(row["n"]) if row else 0
 
     def _filter_parts(
@@ -604,6 +644,7 @@ class Database:
         to_ts: int | None = None,
         media: bool = False,
         status: str | None = None,
+        exclude_statuses: tuple[str, ...] = (),
     ) -> tuple[list[str], list[str], list[Any]]:
         joins: list[str] = []
         where: list[str] = []
@@ -624,6 +665,10 @@ class Database:
         if status:
             where.append("tweets.status = ?")
             params.append(status)
+        elif exclude_statuses:
+            marks = ",".join("?" * len(exclude_statuses))
+            where.append(f"tweets.status NOT IN ({marks})")
+            params.extend(exclude_statuses)
         return joins, where, params
 
     def ids_matching(self, **kwargs: Any) -> list[str]:
