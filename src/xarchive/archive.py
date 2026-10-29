@@ -15,6 +15,7 @@ from xarchive.ytd import (
     COMMUNITY_JS,
     DELETED_JS,
     MEDIA_MEMBER,
+    HEADERS_JS,
     NOTE_TWEET_JS,
     TWEETS_JS,
     classify_tweet,
@@ -23,6 +24,7 @@ from xarchive.ytd import (
     is_skipped_archive_file,
     joined_text,
     media_refs,
+    normalize_header_tweet,
     parse_account_id,
     parse_created_at,
     parse_ytd_js,
@@ -272,6 +274,14 @@ def _import_from_source(src: _BlobSource, db: Database, media_dir: Path) -> Impo
         result.files.append(df)
         for item in parse_ytd_js(src.read_text(df)):
             tweet_items.append((unwrap_item(item), True))
+
+    # tweet-headers.js is the full id+date index. tweets.js may only carry
+    # full text for a newer slice. Append headers after full objects so the
+    # seen-set keeps the richer row and only missing ids are inserted.
+    for hf in _match(names, HEADERS_JS):
+        result.files.append(hf)
+        for item in parse_ytd_js(src.read_text(hf)):
+            tweet_items.append((normalize_header_tweet(unwrap_item(item)), False))
 
     # Copy media keyed by tweet id. {tweetId}-*.jpg|mp4|gif
     copied_by_tweet: dict[str, list[Media]] = {}

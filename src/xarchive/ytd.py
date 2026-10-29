@@ -15,7 +15,7 @@ YTD_PREFIX = re.compile(
 )
 
 TWEETS_JS = re.compile(
-    r"(^|/)data/tweets(?:-part\d+|\d+)?\.js$",
+    r"(^|/)data/tweets?(?:-part\d+|\d+)?\.js$",
     re.IGNORECASE,
 )
 NOTE_TWEET_JS = re.compile(
@@ -105,6 +105,30 @@ def parse_created_at(value: str | None) -> tuple[str, int]:
         dt = dt.replace(tzinfo=timezone.utc)
     dt = dt.astimezone(timezone.utc)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ"), int(dt.timestamp())
+
+
+def normalize_header_tweet(obj: dict[str, Any]) -> dict[str, Any]:
+    """Map a tweet-headers.js record onto the tweets.js field names.
+
+    Official archives list every non-deleted post here (``tweetId`` / ``createdAt``,
+    or ``tweet.tweet_id``). ``tweets.js`` often has full text only for a newer slice.
+    """
+    if not isinstance(obj, dict):
+        return {}
+    tid = tweet_id_str(obj)
+    created = obj.get("created_at") or obj.get("createdAt") or ""
+    text = obj.get("full_text") or obj.get("text") or ""
+    out = dict(obj)
+    if tid:
+        out["id"] = str(tid)
+        out["id_str"] = str(tid)
+    if created:
+        out["created_at"] = str(created)
+    if text:
+        out["full_text"] = text
+    elif "full_text" not in out and "text" not in out:
+        out["full_text"] = ""
+    return out
 
 
 def tweet_id_str(obj: dict[str, Any]) -> str | None:

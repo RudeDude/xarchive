@@ -154,9 +154,13 @@ def _row_to_tweet(row: sqlite3.Row) -> Tweet:
 
 SORTS = {
     "date": "tweets.created_at_ts DESC, CAST(tweets.id AS INTEGER) DESC",
+    "date_asc": "tweets.created_at_ts ASC, CAST(tweets.id AS INTEGER) ASC",
     "likes": "tweets.like_count IS NULL, tweets.like_count DESC, tweets.created_at_ts DESC",
+    "likes_asc": "tweets.like_count IS NULL, tweets.like_count ASC, tweets.created_at_ts ASC",
     "retweets": "tweets.retweet_count IS NULL, tweets.retweet_count DESC, tweets.created_at_ts DESC",
+    "retweets_asc": "tweets.retweet_count IS NULL, tweets.retweet_count ASC, tweets.created_at_ts ASC",
     "views": "tweets.impression_count IS NULL, tweets.impression_count DESC, tweets.created_at_ts DESC",
+    "views_asc": "tweets.impression_count IS NULL, tweets.impression_count ASC, tweets.created_at_ts ASC",
 }
 
 METRIC_COLUMNS = (
@@ -552,6 +556,22 @@ class Database:
                     params2.append(offset)
             rows = self._conn.execute(sql, params2).fetchall()
         return [_row_to_tweet(r) for r in rows]
+
+    def month_counts(self) -> list[tuple[int, int, int]]:
+        """(year, month, count) for posts with a real timestamp, newest month first."""
+        rows = self._conn.execute(
+            """
+            SELECT
+              CAST(strftime('%Y', created_at_ts, 'unixepoch') AS INTEGER) AS y,
+              CAST(strftime('%m', created_at_ts, 'unixepoch') AS INTEGER) AS m,
+              COUNT(*) AS n
+            FROM tweets
+            WHERE created_at_ts > 0
+            GROUP BY y, m
+            ORDER BY y DESC, m DESC
+            """
+        ).fetchall()
+        return [(int(r["y"]), int(r["m"]), int(r["n"])) for r in rows]
 
     def count_matching(
         self,

@@ -41,9 +41,18 @@ def _parser() -> argparse.ArgumentParser:
     q.add_argument("--all", action="store_true", help="print every match (overrides --limit)")
     q.add_argument(
         "--sort",
-        choices=("date", "likes", "retweets", "views"),
+        choices=(
+            "date",
+            "date_asc",
+            "likes",
+            "likes_asc",
+            "retweets",
+            "retweets_asc",
+            "views",
+            "views_asc",
+        ),
         default="date",
-        help="order: date (default), likes, retweets, or views",
+        help="order: date (newest, default) or date_asc; likes/retweets/views or the _asc least-first reverse",
     )
 
     mk = sub.add_parser("mark", help="Mark tweets keep or delete")

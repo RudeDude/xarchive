@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The local UI sort menu adds the reverse of each order: oldest, least likes, least RTs, and least views. A left-hand year/month tree jumps to that year or month; the year that contains the current range (or the newest year) starts expanded.
 - SQLite, media, credentials, and `serve.log` default to `<checkout>/data` instead of `~/.local/share/xarchive`. The virtualenv stays in `<checkout>/.venv`. `./bin/xarchive` runs that interpreter so the checkout moves as one directory. `data/` is gitignored.
 - Local UI pager includes First/Last plus numbered jumps (first pages, around the current page, and the last five) so you can start at the oldest posts and walk backward.
 - Click a thumbnail (or the video surface above the controls) to enlarge it in place; click again to shrink.
@@ -17,6 +18,7 @@
 
 ### Fixed
 
+- Import now reads `data/tweet-headers.js` (and `data/tweet.js`). Official archives list every non-deleted post in the header file, while `tweets.js` may only include full text for a newer slice. Header-only posts are stored with their archive date. A header does not replace a post that already has text. Re-import the ZIP to pick up years that were missing.
 - Opening an existing SQLite cache after the metrics columns were added no longer fails with `no such column: like_count`. The likes/views indexes are created only after `ALTER TABLE` adds the columns.
 - OAuth 2.0 access tokens are refreshed automatically on expiry or HTTP 401 using the stored refresh token (`offline.access`). New tokens (including rotated refresh tokens and `expires_at`) are written to `credentials.json`. Weekly `sync` / `delete --apply` no longer requires a fresh `xarchive auth` every two hours.
 - Keep / Mark delete in the local UI now returns to the same search (path + query), instead of always bouncing to `/`. Open redirects via `//host` or a non-localhost Referer are rejected.

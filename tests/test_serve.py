@@ -76,10 +76,30 @@ def test_index_renders_and_mark_flips_status(cfg, db, archive_zip):
             f'id="t{T2025_PART1}"'
         )
         assert "most RTs" in r.text
+        assert "oldest" in r.text
+        assert "least likes" in r.text
+        assert "least RTs" in r.text
+        assert "least views" in r.text
+        assert 'aria-label="Browse by month"' in r.text
+        assert "from=2018-03-01" in r.text
+        assert "to=2018-03-31" in r.text
+        assert r.text.count("<details open>") == 1
         by_rts = httpx.get(base + "/?sort=retweets", timeout=5.0)
         assert by_rts.text.find(f'id="t{T2022_MEDIA}"') < by_rts.text.find(
             f'id="t{T2019_XYLO}"'
         )
+        assert "sort=retweets&amp;from=2018-03-01&amp;to=2018-03-31" in by_rts.text
+        oldest = httpx.get(base + "/?sort=date_asc", timeout=5.0)
+        assert oldest.text.find(f'id="t{T2018}"') < oldest.text.find(
+            f'id="t{T2025_PART1}"'
+        )
+        march = httpx.get(base + "/?from=2018-03-01&to=2018-03-31", timeout=5.0)
+        assert T2018 in march.text
+        assert T2019_XYLO not in march.text
+        assert 'class="month here"' in march.text
+        assert march.text.count("<details open>") == 1
+        opened = march.text.find("<details open>")
+        assert ">2018</a>" in march.text[opened:opened + 500]
         json_mark = httpx.post(
             base + "/mark",
             data={"id": T2019_XYLO, "status": "keep"},

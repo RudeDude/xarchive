@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import html
 import json
 import logging
@@ -66,8 +67,25 @@ def safe_redirect_target(
 
 CSS = """
 :root { color-scheme: light; }
-body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 880px;
+body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 1080px;
        margin: 1rem auto; padding: 0 .75rem; line-height: 1.35; font-size: 15px; }
+.layout { display: flex; align-items: flex-start; gap: 1.25rem; }
+.main { flex: 1; min-width: 0; }
+.browse { flex: 0 0 9.75rem; position: sticky; top: .75rem;
+          max-height: calc(100vh - 1.5rem); overflow: auto; font-size: .8rem; }
+.browse-title { margin: 0 0 .35rem; color: #555; font-size: .75rem; }
+.browse details { margin: 0 0 .2rem; }
+.browse summary { cursor: pointer; }
+.browse summary a, .browse li a { text-decoration: none; }
+.browse ul { list-style: none; margin: .1rem 0 .3rem; padding: 0 0 0 .85rem; }
+.browse li { margin: .05rem 0; }
+.browse .n { color: #888; }
+.browse a.here { font-weight: 650; }
+@media (max-width: 720px) {
+  .layout { display: block; }
+  .browse { position: static; max-height: 14rem; margin-bottom: .75rem;
+            border-bottom: 1px solid #ddd; padding-bottom: .4rem; }
+}
 header { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; align-items: baseline; }
 h1 { font-size: 1.1rem; margin: 0; }
 nav a { margin-right: .85rem; }
@@ -510,17 +528,113 @@ def _metrics_html(t: Tweet) -> str:
     return " · " + html.escape(" · ".join(bits))
 
 
+_SORT_LABELS = (
+    ("date", "newest"),
+    ("date_asc", "oldest"),
+    ("likes", "most likes"),
+    ("likes_asc", "least likes"),
+    ("retweets", "most RTs"),
+    ("retweets_asc", "least RTs"),
+    ("views", "most views"),
+    ("views_asc", "least views"),
+)
+
+_MONTHS = (
+    "",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
+
 def _sort_options(current: str) -> str:
-    labels = {
-        "date": "newest",
-        "likes": "most likes",
-        "retweets": "most RTs",
-        "views": "most views",
-    }
     return "".join(
-        f'<option value="{html.escape(k)}"{" selected" if current == k else ""}>{html.escape(labels[k])}</option>'
-        for k in labels
+        f'<option value="{html.escape(k)}"{" selected" if current == k else ""}>{html.escape(label)}</option>'
+        for k, label in _SORT_LABELS
     )
+
+
+def _range_url(path: str, qs: dict[str, list[str]], start: str, end: str) -> str:
+    d: dict[str, str] = {}
+    for k, vs in qs.items():
+        if k in {"page", "from", "to"} or not vs or vs[0] == "":
+            continue
+        d[k] = vs[0]
+    d["from"] = start
+    d["to"] = end
+    return f"{path}?{urllib.parse.urlencode(d)}"
+
+
+def _month_bounds(year: int, month: int) -> tuple[str, str]:
+    last = calendar.monthrange(year, month)[1]
+    return f"{year:04d}-{month:02d}-01", f"{year:04d}-{month:02d}-{last:02d}"
+
+
+def _year_bounds(year: int) -> tuple[str, str]:
+    return f"{year:04d}-01-01", f"{year:04d}-12-31"
+
+
+def _browse_tree(db: Database, qs: dict[str, list[str]]) -> str:
+    rows = db.month_counts()
+    if not rows:
+        return '<nav class="browse" aria-label="Browse by month"><p class="browse-title">Months</p><p>No posts yet.</p></nav>'
+    from_date = (qs.get("from") or [""])[0]
+    to_date = (qs.get("to") or [""])[0]
+    years: dict[int, list[tuple[int, int]]] = {}
+    order: list[int] = []
+    for year, month, count in rows:
+        if year not in years:
+            order.append(year)
+            years[year] = []
+        years[year].append((month, count))
+    active_year: int | None = None
+    for year in order:
+        start, end = _year_bounds(year)
+        if from_date == start and to_date == end:
+            active_year = year
+            break
+        for month, _count in years[year]:
+            start, end = _month_bounds(year, month)
+            if from_date == start and to_date == end:
+                active_year = year
+                break
+        if active_year is not None:
+            break
+    if active_year is None:
+        active_year = order[0]
+    parts = ['<nav class="browse" aria-label="Browse by month"><p class="browse-title">Months</p>']
+    for year in order:
+        months = years[year]
+        total = sum(count for _month, count in months)
+        year_start, year_end = _year_bounds(year)
+        year_here = " here" if from_date == year_start and to_date == year_end else ""
+        open_attr = " open" if year == active_year else ""
+        year_href = html.escape(_range_url("/", qs, year_start, year_end))
+        parts.append(f"<details{open_attr}>")
+        parts.append(
+            f'<summary><a class="year{year_here}" href="{year_href}">{year}</a> '
+            f'<span class="n">{total}</span></summary><ul>'
+        )
+        for month, count in months:
+            start, end = _month_bounds(year, month)
+            here = " here" if from_date == start and to_date == end else ""
+            href = html.escape(_range_url("/", qs, start, end))
+            parts.append(
+                f'<li><a class="month{here}" href="{href}">{_MONTHS[month]}</a> '
+                f'<span class="n">{count}</span></li>'
+            )
+        parts.append("</ul></details>")
+    parts.append("</nav>")
+    return "".join(parts)
 
 
 def _cards_for(db: Database, rows: list[Tweet], *, next_path: str) -> str:
@@ -570,6 +684,9 @@ def render_index(db: Database, qs: dict[str, list[str]]) -> bytes:
     if not rows:
         cards = "<p>No tweets. Run <code>xarchive import</code>.</p>"
     body = f"""
+<div class="layout">
+{_browse_tree(db, qs)}
+<div class="main">
 <header>
   <h1>xarchive</h1>
   <nav>
@@ -595,6 +712,8 @@ The server does not call X; <strong>Preview on X</strong> loads an embed in your
 {_pager("/", qs, page, total, PAGE_SIZE)}
 {cards}
 {_pager("/", qs, page, total, PAGE_SIZE)}
+</div>
+</div>
 """
     return _page("xarchive", body)
 

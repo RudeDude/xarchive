@@ -27,7 +27,7 @@ SQLite, media, and credentials default to `data/` in this checkout (`--data-dir`
 
 On X: **Settings → Your account → Download an archive of your data**.
 
-Wait for the email, download the ZIP. Inside you want `data/tweets.js` (YTD JavaScript, not JSON) and `data/tweets_media/{tweetId}-*.jpg|mp4|gif`. Long posts live in `data/note-tweet.js` and are joined automatically.
+Wait for the email, download the ZIP. Inside you want `data/tweets.js` (or older `data/tweet.js`, plus `tweets-partN.js` when the export is split) and `data/tweets_media/{tweetId}-*.jpg|mp4|gif`. `data/tweet-headers.js` is the full id-and-date index; posts that appear only there are kept, and a later full object is not overwritten by an empty header. Long posts live in `data/note-tweet.js` and are joined automatically.
 
 ## 2. Import
 
@@ -47,7 +47,7 @@ xarchive serve --port 8080 --host 127.0.0.1
 # errors/stack traces: data/serve.log
 ```
 
-Chronological list (100 per page, First/Last plus page-number jumps), search, date range, sort by newest / likes / RTs / views, local thumbnails (click to enlarge), keep/delete toggles, checkboxes for bulk mark on the current page, counts, and a **review** page of posts marked for delete. Replies/quotes/retweets show a compact context row (`reply to @user`, local parent text when that post is in the cache). **Preview on X** loads an official embed in the browser (the server still does not call X). Keep/delete marks apply in place without a full reload. No auth, no tracking. Apply still happens in the CLI (with a confirmation phrase).
+Chronological list (100 per page, First/Last plus page-number jumps), search, date range, and a left-hand year/month tree (click a year or month to jump there). Sort by newest or oldest, and by most or least likes, RTs, and views. Local thumbnails (click to enlarge), keep/delete toggles, checkboxes for bulk mark on the current page, counts, and a **review** page of posts marked for delete. Replies/quotes/retweets show a compact context row (`reply to @user`, local parent text when that post is in the cache). **Preview on X** loads an official embed in the browser (the server still does not call X). Keep/delete marks apply in place without a full reload. No auth, no tracking. Apply still happens in the CLI (with a confirmation phrase).
 
 Likes and retweet counts come from the ZIP (`favorite_count` / `retweet_count`). View (impression) counts are not in the archive; `xarchive sync` requests `public_metrics` on new timeline posts and backfills the rest with batched `GET /2/tweets?ids=` (100 ids per request, once per post). A 4k history is about 40 lookups the first time, then zero on later syncs.
 

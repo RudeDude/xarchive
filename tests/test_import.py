@@ -1,10 +1,12 @@
 import json
 import sqlite3
+import zipfile
 from pathlib import Path
 
 from xarchive.archive import import_archive
 from xarchive.db import Database
 from xarchive.ops import query_tweets
+from xarchive.ytd import HEADERS_JS, TWEETS_JS
 
 from tests.conftest import (
     NOTE_PHRASE,
@@ -15,6 +17,8 @@ from tests.conftest import (
     T2025_NOTE,
     T2025_PART1,
     XYLOPHONE,
+    _tweet,
+    _ytd,
     write_archive_zip,
 )
 
@@ -56,11 +60,70 @@ def test_import_query_fts_media_and_note_join(cfg, db, archive_zip):
     assert db.get(T2022_MEDIA).retweet_count == 7
     by_rts = query_tweets(db, sort="retweets")
     assert by_rts[0].id == T2022_MEDIA
+    assert query_tweets(db, sort="date_asc")[0].id == T2018
+    assert query_tweets(db, sort="likes_asc")[0].id == T2018
+    months = db.month_counts()
+    assert (2018, 3, 1) in months
+    assert months == sorted(months, key=lambda row: (row[0], row[1]), reverse=True)
     # types
     types = {t.id: t.tweet_type for t in db.iter_all()}
     assert types[T2018] == "original"
     # missing community folder did not crash (fixture has none)
     assert result.account_id == "5166878"
+
+
+def test_tweet_filename_patterns_include_singular_and_exclude_headers():
+    assert TWEETS_JS.search("twitter/data/tweet.js")
+    assert TWEETS_JS.search("twitter/data/tweets.js")
+    assert TWEETS_JS.search("twitter/data/tweets-part2.js")
+    assert not TWEETS_JS.search("twitter/data/tweet-headers.js")
+    assert HEADERS_JS.search("twitter/data/tweet-headers.js")
+    assert HEADERS_JS.search("twitter/data/tweet_headers-part1.js")
+
+
+def test_tweet_headers_add_older_posts_without_blanking_full_text(cfg, db, tmp_path):
+    root = "twitter-2026-01-01-deadbeef"
+    zpath = tmp_path / "partial.zip"
+    header_old = "201200000000000001"
+    header_iso = "201100000000000002"
+    with zipfile.ZipFile(zpath, "w") as zf:
+        zf.writestr(
+            f"{root}/data/tweets.js",
+            _ytd("tweets", 0, [_tweet(T2025_PART1, "Wed Jan 01 00:00:00 +0000 2025", "recent only")]),
+        )
+        zf.writestr(
+            f"{root}/data/tweet-headers.js",
+            _ytd(
+                "tweet_headers",
+                0,
+                [
+                    {
+                        "tweetHeaders": {
+                            "tweetId": T2025_PART1,
+                            "userId": "1",
+                            "createdAt": "2025-01-01T00:00:00.000Z",
+                        }
+                    },
+                    {"tweet": {"tweet_id": header_old, "created_at": "Thu Mar 01 12:00:00 +0000 2012"}},
+                    {
+                        "tweetHeaders": {
+                            "tweetId": header_iso,
+                            "userId": "1",
+                            "createdAt": "2011-06-15T08:00:00.000Z",
+                        }
+                    },
+                ],
+            ),
+        )
+    result = import_archive(zpath, db, cfg.media_dir)
+    assert result.inserted == 3
+    assert db.get(T2025_PART1).text == "recent only"
+    assert db.get(header_old).created_at.startswith("2012-03-01")
+    assert db.get(header_iso).created_at.startswith("2011-06-15")
+    again = import_archive(zpath, db, cfg.media_dir)
+    assert again.inserted == 0
+    assert db.get(T2025_PART1).text == "recent only"
+    assert db.count() == 3
 
 
 def test_legacy_sqlite_gains_like_count_on_open(tmp_path):
